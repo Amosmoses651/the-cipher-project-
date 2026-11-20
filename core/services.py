@@ -583,7 +583,7 @@ def _fallback_menu_inputs(raw_menu_text: str) -> tuple[DishInput, ...]:
     return tuple(dishes)
 
 
-def _menu_from_smart_data(data: object) -> MenuConversion:
+def _menu_from_smart_data(data: object, fallback_rows: tuple[DishInput, ...] | None = None) -> MenuConversion:
     if not isinstance(data, dict) or not isinstance(data.get("dishes"), list):
         raise ValueError("Gemini returned an invalid menu structure.")
     rows = data["dishes"]
@@ -612,8 +612,18 @@ def _menu_from_smart_data(data: object) -> MenuConversion:
         original_ingredients = original_ingredients.strip()
         if not original_name or not original_ingredients:
             raise ValueError(f"Gemini returned an empty dish name or ingredients at row {index}.")
-        original_price = _money(_decimal(row.get("original_price"), "original_price"))
-        suggested_price = _money(_decimal(row.get("new_price"), "new_price"))
+        try:
+            original_price = _money(_decimal(row.get("original_price"), "original_price"))
+        except ValueError:
+            original_price = ZERO
+        if original_price <= ZERO and fallback_rows:
+            matching_fallback = fallback_rows[index - 1] if index - 1 < len(fallback_rows) else None
+            if matching_fallback:
+                original_price = _money(_decimal(matching_fallback.price, "original_price"))
+        try:
+            suggested_price = _money(_decimal(row.get("new_price"), "new_price"))
+        except ValueError:
+            suggested_price = ZERO
         model_profit_percent = _decimal(row.get("profit_increase_percent"), "profit_increase_percent")
         converted = row.get("converted")
         if not isinstance(converted, bool):
@@ -639,7 +649,7 @@ def _menu_from_smart_data(data: object) -> MenuConversion:
             )
 
         if original_price <= ZERO:
-            raise ValueError(f"Gemini returned a non-positive price at row {index}.")
+            raise ValueError(f"Gemini and fallback parsing returned no valid price at row {index}.")
 
         if converted:
             expected_price = _money(original_price * (Decimal("1") - engine.price_discount))
@@ -719,7 +729,7 @@ def smart_menu_parser(
 ) -> MenuConversion:
     """Parse and convert a menu with Gemini when configured, otherwise use rules.
 
-    Set ``GEMINI_API_KEY`` to enable the strict-JSON ``gemini-3.8-flash`` call.
+    Set ``GEMINI_API_KEY`` to enable the strict-JSON Gemini Flash call.
     Model output is validated and prices/profit are recomputed locally. If the
     SDK, key, network, or response is unavailable, the deterministic dictionary
     engine is used with the supplied parsed rows or a built-in CSV parser.
@@ -741,7 +751,7 @@ def smart_menu_parser(
 
         client = genai.Client(
             api_key=api_key,
-            http_options=genai.types.HttpOptions(timeout=10000),
+            http_options=genai.types.HttpOptions(timeout=30000),
         )
         prompt = (
             "Convert the restaurant menu below into plant-forward versions. "
@@ -760,18 +770,33 @@ def smart_menu_parser(
             "Do not invent dishes or prices. Return every required field.\n\n"
             f"RAW MENU:\n{raw_menu_text}"
         )
-        response = client.models.generate_content(
-            model="gemini-3.8-flash",
-            contents=prompt,
-            config={
-                "temperature": 0.1,
-                "response_mime_type": "application/json",
-                "response_schema": _SMART_MENU_SCHEMA,
-            },
-        )
+        last_request_error: Exception | None = None
+        for attempt in range(2):
+            try:
+                primary_model = "gemini-3.6-flash"
+                fallback_model = "gemini-3-flash-preview"
+                model_name = primary_model if attempt == 0 else fallback_model
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config={
+                        "temperature": 0.1,
+                        "response_mime_type": "application/json",
+                        "response_schema": _SMART_MENU_SCHEMA,
+                    },
+                )
+                break
+            except Exception as error:
+                last_request_error = error
+                message = str(error).upper()
+                if attempt == 0 and any(code in message for code in ("429", "503", "504", "UNAVAILABLE", "DEADLINE")):
+                    continue
+                raise
+        else:
+            raise last_request_error or RuntimeError("Gemini request failed without a response.")
         if not response.text:
             raise ValueError("Gemini returned an empty response.")
-        return _menu_from_smart_data(json.loads(response.text))
+        return _menu_from_smart_data(json.loads(response.text), fallback_rows)
     except Exception as error:
         logger.warning("Gemini menu conversion unavailable; using local rules: %s", error)
         rows = fallback_rows if fallback_rows is not None else _fallback_menu_inputs(raw_menu_text)
