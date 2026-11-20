@@ -246,6 +246,10 @@ def _serialize_result(result: MenuConversionResult, conversion: MenuConversion, 
 				"new_price": str(dish.new_price),
 				"swapped_ingredient_cost": str(dish.swapped_ingredient_cost),
 				"profit_increase_percent": str(dish.profit_increase_percent),
+				"original_nutrition": dish.original_nutrition,
+				"swapped_nutrition": dish.swapped_nutrition,
+				"texture_notes": dish.texture_notes,
+				"flavor_profile": dish.flavor_profile,
 				"swaps": [
 					{"original": swap.original, "replacement": swap.replacement}
 					for swap in dish.swaps
@@ -290,6 +294,10 @@ def _serialize_saved_conversion(conversion: MenuConversion) -> dict:
 			"new_price": str(dish.new_price),
 			"swapped_ingredient_cost": str(dish.swapped_ingredient_cost),
 			"profit_increase_percent": str(dish.profit_increase_percent),
+			"original_nutrition": dish.original_nutrition,
+			"swapped_nutrition": dish.swapped_nutrition,
+			"texture_notes": dish.texture_notes,
+			"flavor_profile": dish.flavor_profile,
 			"swaps": swaps,
 			"converted": converted,
 			"original_cost_is_estimated": None,
@@ -376,6 +384,10 @@ def convert_menu_view(request):
 					original_ingredient_cost=dish.original_ingredient_cost,
 					swapped_ingredient_cost=dish.swapped_ingredient_cost,
 					profit_increase_percent=dish.profit_increase_percent,
+					original_nutrition=dish.original_nutrition,
+					swapped_nutrition=dish.swapped_nutrition,
+					texture_notes=dish.texture_notes,
+					flavor_profile=dish.flavor_profile,
 				)
 				for position, dish in enumerate(result.dishes)
 			])

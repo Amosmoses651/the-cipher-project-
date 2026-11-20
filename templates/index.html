@@ -332,6 +332,34 @@
         badgeRow.append(element('span', 'rounded-sm bg-white px-2.5 py-1 text-xs font-semibold text-ink/60', 'No animal protein detected · unchanged'));
       }
       swappedSide.append(badgeRow);
+      if (dish.original_nutrition || dish.swapped_nutrition) {
+        const nutritionRow = element('div', 'mt-4 grid grid-cols-2 gap-2 border-t border-line pt-4');
+        for (const [label, nutrition] of [['Original', dish.original_nutrition], ['PlantSwap', dish.swapped_nutrition]]) {
+          if (!nutrition) continue;
+          const nutritionCard = element('div', 'rounded-md bg-white/75 p-3');
+          nutritionCard.append(element('p', 'text-[10px] font-bold uppercase tracking-[.08em] text-ink/55', `${label} nutrition`));
+          const detail = `${nutrition.protein_g ?? 0}g protein · ${nutrition.fiber_g ?? 0}g fiber · ${nutrition.calories ?? 0} kcal`;
+          nutritionCard.append(element('p', 'mt-1 text-xs font-semibold leading-5 text-forest', detail));
+          nutritionRow.append(nutritionCard);
+        }
+        swappedSide.append(nutritionRow);
+      }
+      if (dish.texture_notes || dish.flavor_profile) {
+        const sensory = element('div', 'mt-3 space-y-2 rounded-md border border-[#d4dfce] bg-white/70 p-3');
+        if (dish.flavor_profile) {
+          const flavor = element('p', 'text-xs leading-5 text-ink/70');
+          flavor.append(element('strong', 'text-forest', 'Flavor: '));
+          flavor.append(document.createTextNode(dish.flavor_profile));
+          sensory.append(flavor);
+        }
+        if (dish.texture_notes) {
+          const texture = element('p', 'text-xs leading-5 text-ink/70');
+          texture.append(element('strong', 'text-forest', 'Texture: '));
+          texture.append(document.createTextNode(dish.texture_notes));
+          sensory.append(texture);
+        }
+        swappedSide.append(sensory);
+      }
       row.append(originalSide, swappedSide);
       return row;
     }

@@ -41,6 +41,10 @@ class SwappedDish(models.Model):
 	original_ingredient_cost = models.DecimalField(max_digits=8, decimal_places=2, default="0.00")
 	swapped_ingredient_cost = models.DecimalField(max_digits=8, decimal_places=2, default="0.00")
 	profit_increase_percent = models.DecimalField(max_digits=6, decimal_places=2, default="0.00")
+	original_nutrition = models.JSONField(default=dict, blank=True)
+	swapped_nutrition = models.JSONField(default=dict, blank=True)
+	texture_notes = models.TextField(blank=True)
+	flavor_profile = models.TextField(blank=True)
 
 	class Meta:
 		ordering = ["position", "pk"]

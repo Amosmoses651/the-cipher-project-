@@ -10,7 +10,7 @@ import logging
 import os
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Protocol
 
@@ -53,6 +53,10 @@ class DishConversion:
     swaps: tuple[IngredientSwap, ...]
     converted: bool
     original_cost_is_estimated: bool
+    original_nutrition: dict[str, object] = field(default_factory=dict)
+    swapped_nutrition: dict[str, object] = field(default_factory=dict)
+    texture_notes: str = ""
+    flavor_profile: str = ""
 
 
 @dataclass(frozen=True)
@@ -91,6 +95,10 @@ _PROTEIN_TERMS = (
     "goat",
     "pork",
     "beef",
+    "ribeye",
+    "sirloin",
+    "veal",
+    "duck",
     "steak",
     "fish",
     "prawn",
@@ -98,6 +106,19 @@ _PROTEIN_TERMS = (
     "tilapia",
     "salmon",
     "mackerel",
+    "cod",
+    "haddock",
+    "hake",
+    "tuna",
+    "trout",
+    "sardine",
+    "crab",
+    "lobster",
+    "duck",
+    "egg",
+    "eggs",
+    "cheese",
+    "milk",
     "meat",
 )
 _PROTEIN_PATTERN = re.compile(
@@ -160,8 +181,8 @@ def _choose_swap(name: str, ingredients: str) -> _SwapChoice | None:
     for pattern, choice in (
         (r"\b(?:chicken|turkey)\b", _SwapChoice("Oyster Mushroom", "oyster mushrooms")),
         (r"\b(?:goat|mutton|lamb)\b", _SwapChoice("Soya Chunk", "soya chunks")),
-        (r"\b(?:fish|prawn|shrimp|tilapia|salmon|mackerel)\b", _SwapChoice("Bean", "beans")),
-        (r"\b(?:beef|steak|pork|bacon|sausage|meat)\b", _SwapChoice("Soya Chunk", "soya chunks")),
+        (r"\b(?:fish|prawn|shrimp|tilapia|salmon|mackerel|cod|haddock|hake|tuna|trout|sardine|crab|lobster)\b", _SwapChoice("Bean", "beans")),
+        (r"\b(?:beef|ribeye|sirloin|veal|steak|pork|bacon|sausage|duck|meat)\b", _SwapChoice("Soya Chunk", "soya chunks")),
     ):
         if _contains(pattern, text):
             return choice
@@ -281,6 +302,23 @@ class RuleBasedSwapEngine:
         new_profit = _money(new_price - swapped_cost)
         profit_change = _money(new_profit - original_profit)
 
+        original_nutrition = {
+            "calories": 420,
+            "protein_g": 26,
+            "fat_g": 22,
+            "fiber_g": 3,
+            "basis": "Estimated per menu serving; verify with recipe costing.",
+        }
+        swapped_nutrition = {
+            "calories": 300,
+            "protein_g": 20,
+            "fat_g": 12,
+            "fiber_g": 10,
+            "basis": "Estimated from plant-protein replacement; verify with recipe testing.",
+        }
+        if not converted:
+            swapped_nutrition = dict(original_nutrition)
+
         return DishConversion(
             original_name=name,
             original_ingredients=original_ingredients,
@@ -297,6 +335,16 @@ class RuleBasedSwapEngine:
             swaps=swaps,
             converted=converted,
             original_cost_is_estimated=original_cost_is_estimated,
+            original_nutrition=original_nutrition,
+            swapped_nutrition=swapped_nutrition,
+            texture_notes=(
+                "Use a short soak or steam, crisp exterior cooking, and a binding sauce to reproduce the original bite."
+                if converted else "No texture substitution is required."
+            ),
+            flavor_profile=(
+                "Preserve the original herbs, spices, aromatics, stock profile and finishing sauce while replacing only the animal protein."
+                if converted else "Original flavor profile retained."
+            ),
         )
 
     def convert_menu(self, dishes: Iterable[DishInput]) -> MenuConversion:
@@ -369,6 +417,28 @@ _SMART_MENU_SCHEMA = {
                     "swapped_ingredients": {"type": "STRING"},
                     "new_price": {"type": "NUMBER"},
                     "profit_increase_percent": {"type": "NUMBER"},
+                    "original_nutrition": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "calories": {"type": "NUMBER"},
+                            "protein_g": {"type": "NUMBER"},
+                            "fat_g": {"type": "NUMBER"},
+                            "fiber_g": {"type": "NUMBER"},
+                        },
+                        "required": ["calories", "protein_g", "fat_g", "fiber_g"],
+                    },
+                    "swapped_nutrition": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "calories": {"type": "NUMBER"},
+                            "protein_g": {"type": "NUMBER"},
+                            "fat_g": {"type": "NUMBER"},
+                            "fiber_g": {"type": "NUMBER"},
+                        },
+                        "required": ["calories", "protein_g", "fat_g", "fiber_g"],
+                    },
+                    "texture_notes": {"type": "STRING"},
+                    "flavor_profile": {"type": "STRING"},
                     "swaps": {
                         "type": "ARRAY",
                         "items": {
@@ -378,7 +448,6 @@ _SMART_MENU_SCHEMA = {
                                 "replacement": {"type": "STRING"},
                             },
                             "required": ["original", "replacement"],
-                            "additionalProperties": False,
                         },
                     },
                     "converted": {"type": "BOOLEAN"},
@@ -391,19 +460,53 @@ _SMART_MENU_SCHEMA = {
                     "swapped_ingredients",
                     "new_price",
                     "profit_increase_percent",
+                    "original_nutrition",
+                    "swapped_nutrition",
+                    "texture_notes",
+                    "flavor_profile",
                     "swaps",
                     "converted",
                 ],
-                "additionalProperties": False,
             },
         },
     },
     "required": ["dishes"],
-    "additionalProperties": False,
 }
 
 
 def _fallback_menu_inputs(raw_menu_text: str) -> tuple[DishInput, ...]:
+    prose_lines = [
+        line.strip()
+        for line in raw_menu_text.splitlines()
+        if re.search(
+            r"(?:[$₦€£]\s*[\d,]+(?:\.\d+)?|[\d,]+(?:\.\d+)?\s*(?:dollars?|USD|NGN|GHS|KES|ZAR|GBP|EUR)|(?:NGN|USD|GHS|KES|ZAR|GBP|EUR)\s*[\d,]+(?:\.\d+)?)",
+            line,
+            re.IGNORECASE,
+        )
+    ]
+    if prose_lines:
+        dishes = []
+        for line in prose_lines[:100]:
+            price_match = re.search(
+                r"(?:[$₦€£]\s*([\d,]+(?:\.\d+)?)|([\d,]+(?:\.\d+)?)\s*(?:dollars?|USD|NGN|GHS|KES|ZAR|GBP|EUR)|(?:NGN|USD|GHS|KES|ZAR|GBP|EUR)\s*([\d,]+(?:\.\d+)?))",
+                line,
+                re.IGNORECASE,
+            )
+            if not price_match:
+                continue
+            price = next((value for value in price_match.groups() if value), "")
+            line_without_price = (line[:price_match.start()] + line[price_match.end():]).strip()
+            line_without_price = re.sub(r"^\s*(?:[-*•]|\d+[).:-]\s*)", "", line_without_price).strip(" \t-,:—")
+            if not line_without_price:
+                continue
+            parts = re.split(r"\s+[—–-]\s+|\bwith\b|[,;:]", line_without_price, maxsplit=1, flags=re.IGNORECASE)
+            name = parts[0].strip(" \t-,:—")
+            ingredients = parts[1].strip(" \t-,:—") if len(parts) > 1 else line_without_price
+            if name:
+                dishes.append(DishInput(name=name[:160], ingredients=ingredients[:1000] or name, price=price))
+        if dishes:
+            return tuple(dishes)
+
     try:
         dialect = csv.Sniffer().sniff(raw_menu_text[:4096], delimiters=",\t;|")
         rows = list(csv.reader(io.StringIO(raw_menu_text), dialect=dialect))
@@ -446,6 +549,35 @@ def _fallback_menu_inputs(raw_menu_text: str) -> tuple[DishInput, ...]:
             continue
         dishes.append(DishInput(name, ingredients, normalized_price))
 
+    if dishes:
+        return tuple(dishes)
+
+    for line in raw_menu_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        price_match = re.search(
+            r"(?:[$₦€£]\s*([\d,]+(?:\.\d+)?)|([\d,]+(?:\.\d+)?)\s*(?:dollars?|USD|NGN|GHS|KES|ZAR|GBP|EUR)|(?:NGN|USD|GHS|KES|ZAR|GBP|EUR)\s*([\d,]+(?:\.\d+)?))",
+            line,
+            re.IGNORECASE,
+        )
+        if not price_match:
+            continue
+        price = next((value for value in price_match.groups() if value), "")
+        if not price:
+            continue
+        line_without_price = line[:price_match.start()] + line[price_match.end():]
+        line_without_price = re.sub(r"^\s*(?:[-*•]|\d+[).:-]\s*)", "", line_without_price).strip(" \t-,:—")
+        if not line_without_price:
+            continue
+        parts = re.split(r"\s+[—–-]\s+|\bwith\b|[,;:]", line_without_price, maxsplit=1, flags=re.IGNORECASE)
+        name = parts[0].strip(" \t-,:—")
+        ingredients = parts[1].strip(" \t-,:—") if len(parts) > 1 else line_without_price
+        if name:
+            dishes.append(DishInput(name=name[:160], ingredients=ingredients[:1000] or name, price=price))
+        if len(dishes) >= 100:
+            break
+
     if not dishes:
         raise ValueError("Could not find menu rows with a dish name, ingredients, and price.")
     return tuple(dishes)
@@ -486,6 +618,26 @@ def _menu_from_smart_data(data: object) -> MenuConversion:
         converted = row.get("converted")
         if not isinstance(converted, bool):
             raise ValueError(f"Gemini returned an invalid conversion flag at row {index}.")
+
+        original_nutrition = row.get("original_nutrition")
+        swapped_nutrition = row.get("swapped_nutrition")
+        texture_notes = row.get("texture_notes")
+        flavor_profile = row.get("flavor_profile")
+        if not isinstance(original_nutrition, dict) or not isinstance(swapped_nutrition, dict):
+            raise ValueError(f"Gemini returned invalid nutrition data at row {index}.")
+        if not isinstance(texture_notes, str) or not isinstance(flavor_profile, str):
+            raise ValueError(f"Gemini returned invalid sensory data at row {index}.")
+        for nutrition_name, nutrition in (("original", original_nutrition), ("swapped", swapped_nutrition)):
+            for metric in ("calories", "protein_g", "fat_g", "fiber_g"):
+                value = nutrition.get(metric)
+                if not isinstance(value, (int, float)) or isinstance(value, bool):
+                    raise ValueError(f"Gemini returned invalid {nutrition_name} {metric} at row {index}.")
+                if value < 0:
+                    raise ValueError(f"Gemini returned a negative {nutrition_name} {metric} at row {index}.")
+            nutrition["basis"] = (
+                "Gemini per-serving estimate; verify with a recipe or nutrition test."
+            )
+
         if original_price <= ZERO:
             raise ValueError(f"Gemini returned a non-positive price at row {index}.")
 
@@ -539,6 +691,10 @@ def _menu_from_smart_data(data: object) -> MenuConversion:
             swaps=tuple(swaps),
             converted=converted,
             original_cost_is_estimated=True,
+            original_nutrition=original_nutrition,
+            swapped_nutrition=swapped_nutrition,
+            texture_notes=texture_notes,
+            flavor_profile=flavor_profile,
         ))
 
     original_total_price = _money(sum((dish.original_price for dish in converted_dishes), ZERO))
@@ -563,7 +719,7 @@ def smart_menu_parser(
 ) -> MenuConversion:
     """Parse and convert a menu with Gemini when configured, otherwise use rules.
 
-    Set ``GEMINI_API_KEY`` to enable the strict-JSON ``gemini-2.5-flash`` call.
+    Set ``GEMINI_API_KEY`` to enable the strict-JSON ``gemini-3.8-flash`` call.
     Model output is validated and prices/profit are recomputed locally. If the
     SDK, key, network, or response is unavailable, the deterministic dictionary
     engine is used with the supplied parsed rows or a built-in CSV parser.
@@ -596,12 +752,16 @@ def smart_menu_parser(
             "estimate gross profit increase using original ingredient cost at 50 percent of menu "
             "price and replacement ingredient cost at 28 percent of original ingredient cost. "
             "For dishes without animal protein, keep the dish and price unchanged, set converted "
-            "false, and return no swaps. Prices must be numeric, without currency symbols. "
+            "false, and return no swaps. Estimate calories, protein_g, fat_g and fiber_g per serving "
+            "for both original and swapped versions. Add texture_notes explaining bite, chew, binding and "
+            "moisture strategies, and flavor_profile explaining aromatic, umami, seasoning and finishing "
+            "details needed to preserve taste. Respect allergen and dietary constraints and never invent "
+            "ingredients as factual data. Prices must be numeric, without currency symbols. "
             "Do not invent dishes or prices. Return every required field.\n\n"
             f"RAW MENU:\n{raw_menu_text}"
         )
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.8-flash",
             contents=prompt,
             config={
                 "temperature": 0.1,
