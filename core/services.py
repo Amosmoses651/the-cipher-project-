@@ -9,10 +9,14 @@ import json
 import logging
 import os
 import re
+import hashlib
+import urllib.request
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Protocol
+
+from django.core.cache import cache
 
 
 ZERO = Decimal("0.00")
@@ -68,6 +72,7 @@ class MenuConversion:
     new_gross_profit: Decimal
     profit_change: Decimal
     profit_increase_percent: Decimal
+    engine: str = "local"
 
 
 class MenuConverter(Protocol):
@@ -367,6 +372,7 @@ class RuleBasedSwapEngine:
             new_gross_profit=new_gross_profit,
             profit_change=_money(new_gross_profit - original_gross_profit),
             profit_increase_percent=_percent_change(new_gross_profit, original_gross_profit),
+            engine="local",
         )
 
 
@@ -719,6 +725,7 @@ def _menu_from_smart_data(data: object, fallback_rows: tuple[DishInput, ...] | N
         new_gross_profit=new_gross_profit,
         profit_change=_money(new_gross_profit - original_gross_profit),
         profit_increase_percent=_percent_change(new_gross_profit, original_gross_profit),
+        engine="gemini",
     )
 
 
@@ -740,19 +747,20 @@ def smart_menu_parser(
         raise ValueError("The menu is too large. Keep it under 50,000 characters.")
 
     fallback_rows = tuple(fallback_dishes) if fallback_dishes is not None else None
+    cache_key = "plantswap:menu:" + hashlib.sha256(raw_menu_text.strip().encode("utf-8")).hexdigest()
+    cached_result = cache.get(cache_key)
+    if cached_result is not None:
+        return cached_result
+
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not api_key:
-        return RuleBasedSwapEngine().convert_menu(
+        result = RuleBasedSwapEngine().convert_menu(
             fallback_rows if fallback_rows is not None else _fallback_menu_inputs(raw_menu_text)
         )
+        cache.set(cache_key, result, timeout=1800)
+        return result
 
     try:
-        from google import genai
-
-        client = genai.Client(
-            api_key=api_key,
-            http_options=genai.types.HttpOptions(timeout=30000),
-        )
         prompt = (
             "Convert the restaurant menu below into plant-forward versions. "
             "Extract every dish even when rows are inconsistently formatted. "
@@ -776,15 +784,54 @@ def smart_menu_parser(
                 primary_model = "gemini-3.6-flash"
                 fallback_model = "gemini-3-flash-preview"
                 model_name = primary_model if attempt == 0 else fallback_model
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config={
-                        "temperature": 0.1,
-                        "response_mime_type": "application/json",
-                        "response_schema": _SMART_MENU_SCHEMA,
+                rest_schema = {
+                    "type": "object",
+                    "properties": {
+                        "dishes": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "original_name": {"type": "string"},
+                                    "original_ingredients": {"type": "string"},
+                                    "original_price": {"type": "number"},
+                                    "swapped_name": {"type": "string"},
+                                    "swapped_ingredients": {"type": "string"},
+                                    "new_price": {"type": "number"},
+                                    "profit_increase_percent": {"type": "number"},
+                                    "original_nutrition": {"type": "object", "properties": {"calories": {"type": "number"}, "protein_g": {"type": "number"}, "fat_g": {"type": "number"}, "fiber_g": {"type": "number"}}, "required": ["calories", "protein_g", "fat_g", "fiber_g"]},
+                                    "swapped_nutrition": {"type": "object", "properties": {"calories": {"type": "number"}, "protein_g": {"type": "number"}, "fat_g": {"type": "number"}, "fiber_g": {"type": "number"}}, "required": ["calories", "protein_g", "fat_g", "fiber_g"]},
+                                    "texture_notes": {"type": "string"},
+                                    "flavor_profile": {"type": "string"},
+                                    "swaps": {"type": "array", "items": {"type": "object", "properties": {"original": {"type": "string"}, "replacement": {"type": "string"}}, "required": ["original", "replacement"]}},
+                                    "converted": {"type": "boolean"},
+                                },
+                                "required": ["original_name", "original_ingredients", "original_price", "swapped_name", "swapped_ingredients", "new_price", "profit_increase_percent", "original_nutrition", "swapped_nutrition", "texture_notes", "flavor_profile", "swaps", "converted"],
+                            },
+                        },
                     },
+                    "required": ["dishes"],
+                }
+                request_body = json.dumps({
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {
+                        "temperature": 0.1,
+                        "responseMimeType": "application/json",
+                        "responseSchema": rest_schema,
+                    },
+                }).encode("utf-8")
+                request = urllib.request.Request(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent",
+                    data=request_body,
+                    headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+                    method="POST",
                 )
+                with urllib.request.urlopen(request, timeout=12) as api_response:
+                    payload = json.loads(api_response.read().decode("utf-8"))
+                try:
+                    response_text = payload["candidates"][0]["content"]["parts"][0].get("text", "")
+                except (KeyError, IndexError, TypeError):
+                    response_text = ""
                 break
             except Exception as error:
                 last_request_error = error
@@ -794,9 +841,11 @@ def smart_menu_parser(
                 raise
         else:
             raise last_request_error or RuntimeError("Gemini request failed without a response.")
-        if not response.text:
+        if not response_text:
             raise ValueError("Gemini returned an empty response.")
-        return _menu_from_smart_data(json.loads(response.text), fallback_rows)
+        result = _menu_from_smart_data(json.loads(response_text), fallback_rows)
+        cache.set(cache_key, result, timeout=1800)
+        return result
     except Exception as error:
         logger.warning("Gemini menu conversion unavailable; using local rules: %s", error)
         rows = fallback_rows if fallback_rows is not None else _fallback_menu_inputs(raw_menu_text)

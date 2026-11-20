@@ -5,6 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#14382f">
+  <link rel="icon" type="image/svg+xml" href="{% static 'favicon.svg' %}">
   <title>PlantSwap | Menu economics, reimagined</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -116,7 +117,7 @@
         <span><span class="block text-lg font-bold leading-5 tracking-normal">PlantSwap</span><span class="mt-0.5 block text-[10px] font-medium uppercase tracking-[.12em] text-white/55">Menu economics</span></span>
       </a>
       <nav class="flex items-center gap-2 text-sm text-white/80 sm:gap-5" aria-label="Main navigation">
-        <span class="hidden items-center gap-2 rounded-full border border-white/15 px-3 py-1.5 text-xs font-medium text-white/70 sm:inline-flex"><span class="status-dot"></span>Local model ready</span>
+        <span id="engine-status" class="hidden items-center gap-2 rounded-full border border-white/15 px-3 py-1.5 text-xs font-medium text-white/70 sm:inline-flex"><span class="status-dot"></span><span>Checking engine</span></span>
         <a class="hidden hover:text-white sm:inline" href="#converter">Workspace</a>
         {% if user.is_authenticated %}
           <span class="hidden text-xs text-white/65 md:inline">{{ user.username }}</span>
@@ -375,7 +376,7 @@
       addSummaryCell(summaryGrid, 'Plant-forward swaps', `${convertedCount} / ${data.dishes.length}`, 'Dishes with an animal ingredient replaced.');
 
       comparisonList.replaceChildren(...data.dishes.map((dish, index) => renderDish(dish, index, currency)));
-      document.getElementById('result-meta').textContent = `${data.name} · ${data.dishes.length} dishes · ${currency}`;
+      document.getElementById('result-meta').textContent = `${data.name} · ${data.dishes.length} dishes · ${currency} · ${data.engine === 'gemini' ? 'Gemini analysis' : data.engine === 'saved' ? 'Saved conversion' : 'Local analysis'}`;
       document.getElementById('print-menu-name').textContent = data.name;
       resultSection.hidden = false;
       resultSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -484,6 +485,18 @@
     });
 
     document.getElementById('print-button').addEventListener('click', () => window.print());
+
+    fetch('{% url "gemini_health" %}')
+      .then(response => response.json())
+      .then(data => {
+        const badge = document.getElementById('engine-status');
+        if (!badge) return;
+        const label = badge.querySelector('span:last-child');
+        if (label) label.textContent = data.status === 'gemini' ? 'Gemini ready' : data.status === 'local' ? 'Local model ready' : 'Local fallback ready';
+        const dot = badge.querySelector('.status-dot');
+        if (dot) dot.style.backgroundColor = data.status === 'gemini' ? '#c9ef74' : data.status === 'local' ? '#74a583' : '#e7b75e';
+      })
+      .catch(() => {});
   </script>
 </body>
 </html>

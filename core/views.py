@@ -2,12 +2,16 @@ import csv
 import io
 import json
 import re
+import os
+import json as json_module
+import urllib.request
 from decimal import Decimal, InvalidOperation
 
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
 from django.contrib.auth.forms import AuthenticationForm, UserCreationForm
 from django.db import transaction
+from django.core.cache import cache
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -227,6 +231,7 @@ def _serialize_result(result: MenuConversionResult, conversion: MenuConversion, 
 		"id": conversion.pk,
 		"name": conversion.name,
 		"restaurant_name": conversion.restaurant_name,
+		"engine": result.engine,
 		"currency": currency,
 		"original_total_price": str(result.original_total_price),
 		"new_total_price": str(result.new_total_price),
@@ -307,6 +312,7 @@ def _serialize_saved_conversion(conversion: MenuConversion) -> dict:
 		"id": conversion.pk,
 		"name": conversion.name,
 		"restaurant_name": conversion.restaurant_name,
+		"engine": "saved",
 		"currency": conversion.currency,
 		"original_total_price": str(conversion.original_total_price),
 		"new_total_price": str(conversion.new_total_price),
@@ -416,6 +422,53 @@ def convert_menu_view(request):
 			"restaurant_name": restaurant_name,
 			"raw_menu_text": source_menu,
 		}, status=400)
+
+
+@require_GET
+def gemini_health_view(request):
+	health = cache.get("plantswap:gemini-health")
+	if health is not None:
+		return JsonResponse(health)
+
+	api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+	if not api_key:
+		health = {"status": "local", "model": None, "message": "Gemini key is not configured; local rules are active."}
+		cache.set("plantswap:gemini-health", health, timeout=300)
+		return JsonResponse(health)
+
+	try:
+		request_body = json_module.dumps({
+			"contents": [{"parts": [{"text": "Reply with exactly: OK"}]}],
+			"generationConfig": {"temperature": 0.1, "maxOutputTokens": 8},
+		}).encode("utf-8")
+		request = urllib.request.Request(
+			"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent",
+			data=request_body,
+			headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+			method="POST",
+		)
+		with urllib.request.urlopen(request, timeout=8) as response:
+			payload = json_module.loads(response.read().decode("utf-8"))
+		text = ""
+		try:
+			text = payload["candidates"][0]["content"]["parts"][0].get("text", "").strip()
+		except (KeyError, IndexError, TypeError):
+			text = ""
+		health = {
+			"status": "gemini" if text else "degraded",
+			"model": "gemini-3.6-flash",
+			"message": "Gemini is responding." if text else "Gemini returned an empty response.",
+		}
+	except Exception as error:
+		health = {
+			"status": "degraded",
+			"model": "gemini-3.6-flash",
+			"message": "Gemini is unavailable; local conversion rules are active.",
+		}
+		cache.set("plantswap:gemini-health:error", str(error), timeout=300)
+
+	cache.set("plantswap:gemini-health", health, timeout=300)
+	return JsonResponse(health)
 
 
 @require_GET
