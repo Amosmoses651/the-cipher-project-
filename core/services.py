@@ -127,6 +127,44 @@ _PROTEIN_TERMS = (
     "cheese",
     "milk",
     "meat",
+    "venison",
+    "rabbit",
+    "hare",
+    "boar",
+    "buffalo",
+    "bison",
+    "kangaroo",
+    "alligator",
+    "squid",
+    "calamari",
+    "octopus",
+    "mussel",
+    "mussels",
+    "clam",
+    "clams",
+    "oyster",
+    "oysters",
+    "scallop",
+    "scallops",
+    "eel",
+    "halibut",
+    "bass",
+    "grouper",
+    "snapper",
+    "sole",
+    "anchovy",
+    "anchovies",
+    "ham",
+    "prosciutto",
+    "pepperoni",
+    "pastrami",
+    "corned beef",
+    "meatball",
+    "meatballs",
+    "yogurt",
+    "cream",
+    "butter",
+    "gelatin",
 )
 _PROTEIN_PATTERN = re.compile(
     r"\b(?:" + "|".join(re.escape(term) for term in _PROTEIN_TERMS) + r")\b",
@@ -185,11 +223,16 @@ def _choose_swap(name: str, ingredients: str) -> _SwapChoice | None:
     if _contains(r"\bstew\b", name) and _contains(r"\b(?:goat|goat meat|mutton|lamb)\b", text):
         return _SwapChoice("Butter Bean", "butter beans")
 
+    if _contains(r"\b(?:egg|eggs|omelette|omelet|quiche|frittata|custard)\b", text):
+        return _SwapChoice("Tofu", "tofu")
+    if _contains(r"\b(?:cheese|milk|cream|butter|yogurt|gelatin)\b", text):
+        return _SwapChoice("Cashew", "cashew cream and plant protein")
+
     for pattern, choice in (
-        (r"\b(?:chicken|turkey)\b", _SwapChoice("Oyster Mushroom", "oyster mushrooms")),
+        (r"\b(?:chicken|turkey|duck)\b", _SwapChoice("Oyster Mushroom", "oyster mushrooms")),
         (r"\b(?:goat|mutton|lamb)\b", _SwapChoice("Soya Chunk", "soya chunks")),
-        (r"\b(?:fish|prawn|shrimp|tilapia|salmon|mackerel|cod|haddock|hake|tuna|trout|sardine|crab|lobster)\b", _SwapChoice("Bean", "beans")),
-        (r"\b(?:beef|ribeye|sirloin|veal|steak|pork|bacon|sausage|duck|meat)\b", _SwapChoice("Soya Chunk", "soya chunks")),
+        (r"\b(?:fish|prawn|shrimp|tilapia|salmon|mackerel|cod|haddock|hake|tuna|trout|sardine|crab|lobster|squid|calamari|octopus|mussel|mussels|clam|clams|oyster|oysters|scallop|scallops|eel|halibut|bass|grouper|snapper|sole|anchovy|anchovies)\b", _SwapChoice("Bean", "beans")),
+        (r"\b(?:beef|ribeye|sirloin|veal|steak|pork|bacon|sausage|duck|venison|rabbit|hare|boar|buffalo|bison|kangaroo|alligator|ham|prosciutto|pepperoni|pastrami|meat|meatball|meatballs)\b", _SwapChoice("Soya Chunk", "soya chunks")),
     ):
         if _contains(pattern, text):
             return choice

@@ -7,6 +7,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from .models import MenuConversion
+from .services import DishInput, smart_menu_parser
 
 
 class AccountAndConversionAccessTests(TestCase):
@@ -111,6 +112,37 @@ class AccountAndConversionAccessTests(TestCase):
 		self.assertEqual(response.status_code, 200)
 		self.assertEqual(len(response.json()["dishes"]), 3)
 		self.assertEqual(response.json()["dishes"][0]["swapped_name"], "Soya Chunk Suya")
+
+	def test_currency_override_is_saved_and_returned(self):
+		self.client.force_login(self.owner)
+		payload = {
+			"menu_text": "Dish Name,Ingredients,Current Price\nBeef Suya,beef; pepper,6500",
+			"restaurant_name": "Currency Test",
+			"currency": "EUR",
+		}
+		with patch.dict(os.environ, {"OPENAI_API_KEY": ""}):
+			response = self.client.post(
+				reverse("convert_menu"),
+				data=json.dumps(payload),
+				content_type="application/json",
+			)
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.json()["currency"], "EUR")
+
+	def test_broad_animal_protein_rules_swap_venison_and_calamari(self):
+		with patch.dict(os.environ, {"OPENAI_API_KEY": ""}):
+			venison = smart_menu_parser(
+				"unused",
+				fallback_dishes=(DishInput("Venison Burger", "venison, onion, pepper", "30"),),
+			)
+			calamari = smart_menu_parser(
+				"unused",
+				fallback_dishes=(DishInput("Calamari Stew", "squid, tomato, chilli", "20"),),
+			)
+		self.assertTrue(venison.dishes[0].converted)
+		self.assertIn("Mushroom", venison.dishes[0].swapped_name)
+		self.assertTrue(calamari.dishes[0].converted)
+		self.assertIn("Bean", calamari.dishes[0].swapped_name)
 
 	def test_index_only_lists_the_signed_in_users_conversions(self):
 		MenuConversion.objects.create(

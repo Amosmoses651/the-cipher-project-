@@ -22,7 +22,24 @@ from .services import DishInput, MenuConversion as MenuConversionResult, smart_m
 
 MAX_MENU_LENGTH = 50000
 MAX_DISHES = 100
-SUPPORTED_CURRENCIES = ("NGN", "USD", "GHS", "KES", "ZAR", "GBP", "EUR")
+SUPPORTED_CURRENCIES = (
+	"AED", "AFN", "ALL", "AMD", "ANG", "AOA", "ARS", "AUD", "AWG", "AZN",
+	"BAM", "BBD", "BDT", "BGN", "BHD", "BIF", "BMD", "BND", "BOB", "BRL",
+	"BSD", "BTN", "BWP", "BYN", "BZD", "CAD", "CDF", "CHF", "CLP", "CNY",
+	"COP", "CRC", "CUP", "CVE", "CZK", "DJF", "DKK", "DOP", "DZD", "EGP",
+	"ERN", "ETB", "EUR", "FJD", "FKP", "GBP", "GEL", "GHS", "GIP", "GMD",
+	"GNF", "GTQ", "GYD", "HKD", "HNL", "HTG", "HUF", "IDR", "ILS", "INR",
+	"IQD", "IRR", "ISK", "JMD", "JOD", "JPY", "KES", "KGS", "KHR", "KMF",
+	"KRW", "KWD", "KYD", "KZT", "LAK", "LBP", "LKR", "LRD", "LSL", "LYD",
+	"MAD", "MDL", "MGA", "MKD", "MMK", "MNT", "MOP", "MRU", "MUR", "MVR",
+	"MWK", "MXN", "MYR", "MZN", "NAD", "NGN", "NIO", "NOK", "NPR", "NZD",
+	"OMR", "PAB", "PEN", "PGK", "PHP", "PKR", "PLN", "PYG", "QAR", "RON",
+	"RSD", "RUB", "RWF", "SAR", "SBD", "SCR", "SDG", "SEK", "SGD", "SHP",
+	"SLE", "SOS", "SRD", "SSP", "STN", "SVC", "SYP", "SZL", "THB", "TJS",
+	"TMT", "TND", "TOP", "TRY", "TTD", "TWD", "TZS", "UAH", "UGX", "USD",
+	"UYU", "UZS", "VES", "VND", "VUV", "WST", "XAF", "XCD", "XOF", "XPF",
+	"YER", "ZAR", "ZMW", "ZWG",
+)
 SAMPLE_MENU = (
 	"Dish Name,Ingredients,Current Price\n"
 	'Beef Suya,"beef; suya spice; ginger; pepper",NGN 6500\n'
@@ -38,7 +55,10 @@ def index(request):
 		if request.user.is_authenticated
 		else MenuConversion.objects.none()
 	)
-	return render(request, "core/index.html", {"recent_conversions": recent_conversions})
+	return render(request, "core/index.html", {
+		"recent_conversions": recent_conversions,
+		"currencies": SUPPORTED_CURRENCIES,
+	})
 
 
 def _auth_redirect(request):
@@ -346,9 +366,11 @@ def convert_menu_view(request):
 				raise ValueError("The request body must be a JSON object.")
 			source_menu = payload.get("menu_text", "")
 			restaurant_name = payload.get("restaurant_name", "")
+			currency_override = payload.get("currency", "")
 		else:
 			source_menu = request.POST.get("menu_text", "")
 			restaurant_name = request.POST.get("restaurant_name", "")
+			currency_override = request.POST.get("currency", "")
 			if not source_menu and request.FILES.get("menu_file"):
 				try:
 					source_menu = request.FILES["menu_file"].read().decode("utf-8-sig")
@@ -359,11 +381,17 @@ def convert_menu_view(request):
 		if not isinstance(restaurant_name, str):
 			raise ValueError("Restaurant name must be a string.")
 		restaurant_name = restaurant_name.strip()[:120]
+		if not isinstance(currency_override, str):
+			raise ValueError("Currency must be a string.")
+		currency_override = currency_override.strip().upper()
+		if currency_override and currency_override not in SUPPORTED_CURRENCIES:
+			raise ValueError("Choose a valid ISO currency code.")
 		try:
-			fallback_dishes, currency = _parse_menu(source_menu)
+			fallback_dishes, detected_currency = _parse_menu(source_menu)
 		except ValueError:
 			fallback_dishes = None
-			currency = _detect_currency(source_menu)
+			detected_currency = _detect_currency(source_menu)
+		currency = currency_override or detected_currency
 		result = smart_menu_parser(source_menu, fallback_dishes=fallback_dishes)
 		menu_name = f"{restaurant_name} menu" if restaurant_name else "Menu conversion"
 		menu_name = f"{menu_name} · {timezone.localtime():%Y-%m-%d %H:%M}"
