@@ -10,13 +10,13 @@ import logging
 import os
 import re
 import hashlib
-import urllib.request
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Protocol
 
 from django.core.cache import cache
+from pydantic import BaseModel, ConfigDict
 
 
 ZERO = Decimal("0.00")
@@ -61,6 +61,8 @@ class DishConversion:
     swapped_nutrition: dict[str, object] = field(default_factory=dict)
     texture_notes: str = ""
     flavor_profile: str = ""
+    price_sources: list[str] = field(default_factory=list)
+    market_price_note: str = ""
 
 
 @dataclass(frozen=True)
@@ -591,16 +593,16 @@ def _fallback_menu_inputs(raw_menu_text: str) -> tuple[DishInput, ...]:
 
 def _menu_from_smart_data(data: object, fallback_rows: tuple[DishInput, ...] | None = None) -> MenuConversion:
     if not isinstance(data, dict) or not isinstance(data.get("dishes"), list):
-        raise ValueError("Gemini returned an invalid menu structure.")
+        raise ValueError("OpenAI returned an invalid menu structure.")
     rows = data["dishes"]
     if not rows or len(rows) > 100:
-        raise ValueError("Gemini must return between 1 and 100 menu dishes.")
+        raise ValueError("OpenAI must return between 1 and 100 menu dishes.")
 
     engine = RuleBasedSwapEngine()
     converted_dishes: list[DishConversion] = []
     for index, row in enumerate(rows, start=1):
         if not isinstance(row, dict):
-            raise ValueError(f"Gemini returned an invalid dish at row {index}.")
+            raise ValueError(f"OpenAI returned an invalid dish at row {index}.")
         original_name = row.get("original_name")
         original_ingredients = row.get("original_ingredients")
         swapped_name = row.get("swapped_name")
@@ -612,12 +614,12 @@ def _menu_from_smart_data(data: object, fallback_rows: tuple[DishInput, ...] | N
             swapped_name,
             swapped_ingredients,
         )) or not isinstance(swaps_data, list):
-            raise ValueError(f"Gemini returned invalid text fields at row {index}.")
+            raise ValueError(f"OpenAI returned invalid text fields at row {index}.")
 
         original_name = original_name.strip()
         original_ingredients = original_ingredients.strip()
         if not original_name or not original_ingredients:
-            raise ValueError(f"Gemini returned an empty dish name or ingredients at row {index}.")
+            raise ValueError(f"OpenAI returned an empty dish name or ingredients at row {index}.")
         try:
             original_price = _money(_decimal(row.get("original_price"), "original_price"))
         except ValueError:
@@ -633,38 +635,38 @@ def _menu_from_smart_data(data: object, fallback_rows: tuple[DishInput, ...] | N
         model_profit_percent = _decimal(row.get("profit_increase_percent"), "profit_increase_percent")
         converted = row.get("converted")
         if not isinstance(converted, bool):
-            raise ValueError(f"Gemini returned an invalid conversion flag at row {index}.")
+            raise ValueError(f"OpenAI returned an invalid conversion flag at row {index}.")
 
         original_nutrition = row.get("original_nutrition")
         swapped_nutrition = row.get("swapped_nutrition")
         texture_notes = row.get("texture_notes")
         flavor_profile = row.get("flavor_profile")
         if not isinstance(original_nutrition, dict) or not isinstance(swapped_nutrition, dict):
-            raise ValueError(f"Gemini returned invalid nutrition data at row {index}.")
+            raise ValueError(f"OpenAI returned invalid nutrition data at row {index}.")
         if not isinstance(texture_notes, str) or not isinstance(flavor_profile, str):
-            raise ValueError(f"Gemini returned invalid sensory data at row {index}.")
+            raise ValueError(f"OpenAI returned invalid sensory data at row {index}.")
         for nutrition_name, nutrition in (("original", original_nutrition), ("swapped", swapped_nutrition)):
             for metric in ("calories", "protein_g", "fat_g", "fiber_g"):
                 value = nutrition.get(metric)
                 if not isinstance(value, (int, float)) or isinstance(value, bool):
-                    raise ValueError(f"Gemini returned invalid {nutrition_name} {metric} at row {index}.")
+                    raise ValueError(f"OpenAI returned invalid {nutrition_name} {metric} at row {index}.")
                 if value < 0:
-                    raise ValueError(f"Gemini returned a negative {nutrition_name} {metric} at row {index}.")
+                    raise ValueError(f"OpenAI returned a negative {nutrition_name} {metric} at row {index}.")
             nutrition["basis"] = (
-                "Gemini per-serving estimate; verify with a recipe or nutrition test."
+                "OpenAI live or estimated per-serving data; verify with a recipe or nutrition test."
             )
 
         if original_price <= ZERO:
-            raise ValueError(f"Gemini and fallback parsing returned no valid price at row {index}.")
+            raise ValueError(f"OpenAI and fallback parsing returned no valid price at row {index}.")
 
         if converted:
             expected_price = _money(original_price * (Decimal("1") - engine.price_discount))
             if not (original_price * Decimal("0.80") <= suggested_price <= original_price * Decimal("0.90")):
-                raise ValueError(f"Gemini returned an invalid reduced price at row {index}.")
+                raise ValueError(f"OpenAI returned an invalid reduced price at row {index}.")
             if _ANIMAL_PATTERN.search(swapped_ingredients):
-                raise ValueError(f"Gemini left an animal protein in the swapped ingredients at row {index}.")
+                raise ValueError(f"OpenAI left an animal protein in the swapped ingredients at row {index}.")
             if model_profit_percent < ZERO:
-                raise ValueError(f"Gemini returned an invalid profit estimate at row {index}.")
+                raise ValueError(f"OpenAI returned an invalid profit estimate at row {index}.")
             final_name = swapped_name.strip() or original_name
             final_ingredients = swapped_ingredients
             final_price = expected_price
@@ -673,11 +675,11 @@ def _menu_from_smart_data(data: object, fallback_rows: tuple[DishInput, ...] | N
             swaps: list[IngredientSwap] = []
             for swap in swaps_data:
                 if not isinstance(swap, dict):
-                    raise ValueError(f"Gemini returned an invalid ingredient swap at row {index}.")
+                    raise ValueError(f"OpenAI returned an invalid ingredient swap at row {index}.")
                 original = swap.get("original")
                 replacement = swap.get("replacement")
                 if not isinstance(original, str) or not isinstance(replacement, str):
-                    raise ValueError(f"Gemini returned invalid ingredient swap fields at row {index}.")
+                    raise ValueError(f"OpenAI returned invalid ingredient swap fields at row {index}.")
                 swaps.append(IngredientSwap(original, replacement))
             if not swaps:
                 swaps.append(IngredientSwap(original_ingredients, final_ingredients))
@@ -725,8 +727,46 @@ def _menu_from_smart_data(data: object, fallback_rows: tuple[DishInput, ...] | N
         new_gross_profit=new_gross_profit,
         profit_change=_money(new_gross_profit - original_gross_profit),
         profit_increase_percent=_percent_change(new_gross_profit, original_gross_profit),
-        engine="gemini",
+        engine="openai",
     )
+
+
+class OpenAINutrition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    calories: float
+    protein_g: float
+    fat_g: float
+    fiber_g: float
+
+
+class OpenAISwap(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    original: str
+    replacement: str
+
+
+class OpenAIDish(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    original_name: str
+    original_ingredients: str
+    original_price: float
+    swapped_name: str
+    swapped_ingredients: str
+    new_price: float
+    profit_increase_percent: float
+    original_nutrition: OpenAINutrition
+    swapped_nutrition: OpenAINutrition
+    texture_notes: str
+    flavor_profile: str
+    swaps: list[OpenAISwap]
+    converted: bool
+    price_sources: list[str]
+    market_price_note: str
+
+
+class OpenAIMenu(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    dishes: list[OpenAIDish]
 
 
 def smart_menu_parser(
@@ -734,25 +774,19 @@ def smart_menu_parser(
     *,
     fallback_dishes: Iterable[DishInput] | None = None,
 ) -> MenuConversion:
-    """Parse and convert a menu with Gemini when configured, otherwise use rules.
-
-    Set ``GEMINI_API_KEY`` to enable the strict-JSON Gemini Flash call.
-    Model output is validated and prices/profit are recomputed locally. If the
-    SDK, key, network, or response is unavailable, the deterministic dictionary
-    engine is used with the supplied parsed rows or a built-in CSV parser.
-    """
+    """Parse, price and convert a menu with OpenAI web search and local fallback."""
     if not isinstance(raw_menu_text, str) or not raw_menu_text.strip():
         raise ValueError("Menu text is required.")
     if len(raw_menu_text) > 50000:
         raise ValueError("The menu is too large. Keep it under 50,000 characters.")
 
     fallback_rows = tuple(fallback_dishes) if fallback_dishes is not None else None
-    cache_key = "plantswap:menu:" + hashlib.sha256(raw_menu_text.strip().encode("utf-8")).hexdigest()
+    cache_key = "plantswap:openai:menu:" + hashlib.sha256(raw_menu_text.strip().encode("utf-8")).hexdigest()
     cached_result = cache.get(cache_key)
     if cached_result is not None:
         return cached_result
 
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not api_key:
         result = RuleBasedSwapEngine().convert_menu(
             fallback_rows if fallback_rows is not None else _fallback_menu_inputs(raw_menu_text)
@@ -761,92 +795,47 @@ def smart_menu_parser(
         return result
 
     try:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=api_key, timeout=30.0)
         prompt = (
             "Convert the restaurant menu below into plant-forward versions. "
-            "Extract every dish even when rows are inconsistently formatted. "
-            "Replace animal proteins with suitable local plant proteins such as soya chunks, "
-            "oyster mushrooms, beans, or lentils. Preserve seasonings and non-animal ingredients. "
-            "For converted dishes, set new_price about 18 percent below original_price and "
-            "estimate gross profit increase using original ingredient cost at 50 percent of menu "
-            "price and replacement ingredient cost at 28 percent of original ingredient cost. "
-            "For dishes without animal protein, keep the dish and price unchanged, set converted "
-            "false, and return no swaps. Estimate calories, protein_g, fat_g and fiber_g per serving "
-            "for both original and swapped versions. Add texture_notes explaining bite, chew, binding and "
-            "moisture strategies, and flavor_profile explaining aromatic, umami, seasoning and finishing "
-            "details needed to preserve taste. Respect allergen and dietary constraints and never invent "
-            "ingredients as factual data. Prices must be numeric, without currency symbols. "
-            "Do not invent dishes or prices. Return every required field.\n\n"
+            "Use live web search to find current local market and restaurant dish prices. "
+            "Infer the currency only from clear symbols or regional context. Replace animal proteins "
+            "with soya chunks, oyster mushrooms, beans or lentils while preserving herbs, spices, stocks, "
+            "acidity, heat, aromatics and finishing sauces. Explain texture preservation through moisture, "
+            "binding and cooking technique. Estimate calories, protein_g, fat_g and fiber_g per serving. "
+            "Return price_sources as source names or URLs and never invent sources or dishes. "
+            "Set converted false for dishes with no animal protein.\n\n"
             f"RAW MENU:\n{raw_menu_text}"
         )
-        last_request_error: Exception | None = None
-        for attempt in range(2):
-            try:
-                primary_model = "gemini-3.6-flash"
-                fallback_model = "gemini-3-flash-preview"
-                model_name = primary_model if attempt == 0 else fallback_model
-                rest_schema = {
-                    "type": "object",
-                    "properties": {
-                        "dishes": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "original_name": {"type": "string"},
-                                    "original_ingredients": {"type": "string"},
-                                    "original_price": {"type": "number"},
-                                    "swapped_name": {"type": "string"},
-                                    "swapped_ingredients": {"type": "string"},
-                                    "new_price": {"type": "number"},
-                                    "profit_increase_percent": {"type": "number"},
-                                    "original_nutrition": {"type": "object", "properties": {"calories": {"type": "number"}, "protein_g": {"type": "number"}, "fat_g": {"type": "number"}, "fiber_g": {"type": "number"}}, "required": ["calories", "protein_g", "fat_g", "fiber_g"]},
-                                    "swapped_nutrition": {"type": "object", "properties": {"calories": {"type": "number"}, "protein_g": {"type": "number"}, "fat_g": {"type": "number"}, "fiber_g": {"type": "number"}}, "required": ["calories", "protein_g", "fat_g", "fiber_g"]},
-                                    "texture_notes": {"type": "string"},
-                                    "flavor_profile": {"type": "string"},
-                                    "swaps": {"type": "array", "items": {"type": "object", "properties": {"original": {"type": "string"}, "replacement": {"type": "string"}}, "required": ["original", "replacement"]}},
-                                    "converted": {"type": "boolean"},
-                                },
-                                "required": ["original_name", "original_ingredients", "original_price", "swapped_name", "swapped_ingredients", "new_price", "profit_increase_percent", "original_nutrition", "swapped_nutrition", "texture_notes", "flavor_profile", "swaps", "converted"],
-                            },
-                        },
-                    },
-                    "required": ["dishes"],
-                }
-                request_body = json.dumps({
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {
-                        "temperature": 0.1,
-                        "responseMimeType": "application/json",
-                        "responseSchema": rest_schema,
-                    },
-                }).encode("utf-8")
-                request = urllib.request.Request(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent",
-                    data=request_body,
-                    headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
-                    method="POST",
-                )
-                with urllib.request.urlopen(request, timeout=12) as api_response:
-                    payload = json.loads(api_response.read().decode("utf-8"))
-                try:
-                    response_text = payload["candidates"][0]["content"]["parts"][0].get("text", "")
-                except (KeyError, IndexError, TypeError):
-                    response_text = ""
-                break
-            except Exception as error:
-                last_request_error = error
-                message = str(error).upper()
-                if attempt == 0 and any(code in message for code in ("429", "503", "504", "UNAVAILABLE", "DEADLINE")):
-                    continue
-                raise
-        else:
-            raise last_request_error or RuntimeError("Gemini request failed without a response.")
-        if not response_text:
-            raise ValueError("Gemini returned an empty response.")
-        result = _menu_from_smart_data(json.loads(response_text), fallback_rows)
+        response = client.responses.parse(
+            model="gpt-4.1-mini",
+            input=[
+                {"role": "system", "content": "Return JSON only through the provided schema. Use live web search for current ingredient and menu prices. Clearly distinguish estimates from listed restaurant prices."},
+                {"role": "user", "content": prompt},
+            ],
+            tools=[{"type": "web_search_preview", "search_context_size": "medium"}],
+            text_format=OpenAIMenu,
+            temperature=0.2,
+            max_output_tokens=6000,
+            timeout=30.0,
+        )
+        if response.status != "completed" or response.output_parsed is None:
+            raise RuntimeError("OpenAI did not return a completed structured result.")
+
+        payload = response.output_parsed.model_dump()
+        result = _menu_from_smart_data(payload, fallback_rows)
+
+        for dish, parsed_dish in zip(result.dishes, payload["dishes"]):
+            object.__setattr__(dish, "price_sources", list(parsed_dish.get("price_sources", [])))
+            object.__setattr__(dish, "market_price_note", parsed_dish.get("market_price_note", ""))
+
         cache.set(cache_key, result, timeout=1800)
         return result
     except Exception as error:
-        logger.warning("Gemini menu conversion unavailable; using local rules: %s", error)
+        logger.warning("OpenAI menu conversion unavailable; using local rules: %s", error)
         rows = fallback_rows if fallback_rows is not None else _fallback_menu_inputs(raw_menu_text)
-        return RuleBasedSwapEngine().convert_menu(rows)
+        result = RuleBasedSwapEngine().convert_menu(rows)
+        cache.set(cache_key, result, timeout=1800)
+        return result

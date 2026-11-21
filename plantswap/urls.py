@@ -27,6 +27,6 @@ urlpatterns = [
     path("accounts/logout/", views.logout_view, name="logout"),
     path("api/convert/", views.convert_menu_view, name="convert_menu"),
     path("api/sample/", views.sample_menu_view, name="sample_menu"),
-    path("api/health/", views.gemini_health_view, name="gemini_health"),
+    path("api/health/", views.openai_health_view, name="openai_health"),
     path("api/conversions/<int:conversion_id>/", views.conversion_detail, name="conversion_detail"),
 ]

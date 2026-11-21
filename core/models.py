@@ -45,6 +45,10 @@ class SwappedDish(models.Model):
 	swapped_nutrition = models.JSONField(default=dict, blank=True)
 	texture_notes = models.TextField(blank=True)
 	flavor_profile = models.TextField(blank=True)
+	price_sources = models.JSONField(default=list, blank=True)
+	market_price_note = models.TextField(blank=True)
+	price_sources = models.JSONField(default=list, blank=True)
+	market_price_note = models.TextField(blank=True)
 
 	class Meta:
 		ordering = ["position", "pk"]

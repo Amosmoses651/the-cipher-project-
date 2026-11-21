@@ -3,8 +3,6 @@ import io
 import json
 import re
 import os
-import json as json_module
-import urllib.request
 from decimal import Decimal, InvalidOperation
 
 from django.contrib.auth import login as auth_login
@@ -255,6 +253,8 @@ def _serialize_result(result: MenuConversionResult, conversion: MenuConversion, 
 				"swapped_nutrition": dish.swapped_nutrition,
 				"texture_notes": dish.texture_notes,
 				"flavor_profile": dish.flavor_profile,
+				"price_sources": dish.price_sources,
+				"market_price_note": dish.market_price_note,
 				"swaps": [
 					{"original": swap.original, "replacement": swap.replacement}
 					for swap in dish.swaps
@@ -303,6 +303,8 @@ def _serialize_saved_conversion(conversion: MenuConversion) -> dict:
 			"swapped_nutrition": dish.swapped_nutrition,
 			"texture_notes": dish.texture_notes,
 			"flavor_profile": dish.flavor_profile,
+			"price_sources": dish.price_sources,
+			"market_price_note": dish.market_price_note,
 			"swaps": swaps,
 			"converted": converted,
 			"original_cost_is_estimated": None,
@@ -394,6 +396,8 @@ def convert_menu_view(request):
 					swapped_nutrition=dish.swapped_nutrition,
 					texture_notes=dish.texture_notes,
 					flavor_profile=dish.flavor_profile,
+					price_sources=dish.price_sources,
+					market_price_note=dish.market_price_note,
 				)
 				for position, dish in enumerate(result.dishes)
 			])
@@ -425,49 +429,41 @@ def convert_menu_view(request):
 
 
 @require_GET
-def gemini_health_view(request):
-	health = cache.get("plantswap:gemini-health")
+def openai_health_view(request):
+	health = cache.get("plantswap:openai-health")
 	if health is not None:
 		return JsonResponse(health)
 
-	api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+	api_key = os.environ.get("OPENAI_API_KEY", "").strip()
 	if not api_key:
-		health = {"status": "local", "model": None, "message": "Gemini key is not configured; local rules are active."}
-		cache.set("plantswap:gemini-health", health, timeout=300)
+		health = {"status": "local", "model": None, "message": "OpenAI key is not configured; local rules are active."}
+		cache.set("plantswap:openai-health", health, timeout=300)
 		return JsonResponse(health)
 
 	try:
-		request_body = json_module.dumps({
-			"contents": [{"parts": [{"text": "Reply with exactly: OK"}]}],
-			"generationConfig": {"temperature": 0.1, "maxOutputTokens": 8},
-		}).encode("utf-8")
-		request = urllib.request.Request(
-			"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent",
-			data=request_body,
-			headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
-			method="POST",
+		from openai import OpenAI
+		client = OpenAI(api_key=api_key, timeout=8.0)
+		response = client.responses.create(
+			model="gpt-4.1-mini",
+			input="Reply with exactly: OK",
+			max_output_tokens=8,
 		)
-		with urllib.request.urlopen(request, timeout=8) as response:
-			payload = json_module.loads(response.read().decode("utf-8"))
-		text = ""
-		try:
-			text = payload["candidates"][0]["content"]["parts"][0].get("text", "").strip()
-		except (KeyError, IndexError, TypeError):
-			text = ""
+		text = (response.output_text or "").strip()
 		health = {
-			"status": "gemini" if text else "degraded",
-			"model": "gemini-3.6-flash",
-			"message": "Gemini is responding." if text else "Gemini returned an empty response.",
+			"status": "openai" if text else "degraded",
+			"model": "gpt-4.1-mini",
+			"message": "OpenAI is responding." if text else "OpenAI returned an empty response.",
 		}
 	except Exception as error:
-		health = {
-			"status": "degraded",
-			"model": "gemini-3.6-flash",
-			"message": "Gemini is unavailable; local conversion rules are active.",
-		}
-		cache.set("plantswap:gemini-health:error", str(error), timeout=300)
+		message = str(error)
+		if "429" in message or "credits remaining" in message.lower():
+			detail = "OpenAI credits are unavailable; local conversion rules are active."
+		else:
+			detail = "OpenAI is unavailable; local conversion rules are active."
+		health = {"status": "degraded", "model": "gpt-4.1-mini", "message": detail}
+		cache.set("plantswap:openai-health:error", message, timeout=300)
 
-	cache.set("plantswap:gemini-health", health, timeout=300)
+	cache.set("plantswap:openai-health", health, timeout=300)
 	return JsonResponse(health)
 
 

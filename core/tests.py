@@ -43,7 +43,7 @@ class AccountAndConversionAccessTests(TestCase):
 
 	def test_signed_in_conversion_is_owned_and_readable_by_owner(self):
 		self.client.force_login(self.owner)
-		with patch.dict(os.environ, {"GEMINI_API_KEY": ""}):
+		with patch.dict(os.environ, {"OPENAI_API_KEY": ""}):
 			response = self.client.post(
 				reverse("convert_menu"),
 				data=json.dumps({
@@ -102,7 +102,7 @@ class AccountAndConversionAccessTests(TestCase):
 			'Chicken Pepper Soup,"chicken, uziza, pepper, onions",NGN 5800\n'
 			'Plantain Bowl,"plantain, beans, red pepper",NGN 4200'
 		)
-		with patch.dict(os.environ, {"GEMINI_API_KEY": ""}):
+		with patch.dict(os.environ, {"OPENAI_API_KEY": ""}):
 			response = self.client.post(
 				reverse("convert_menu"),
 				data=json.dumps({"menu_text": payload, "restaurant_name": "Test Kitchen"}),
