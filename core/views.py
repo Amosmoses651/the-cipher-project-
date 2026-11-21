@@ -3,6 +3,8 @@ import io
 import json
 import re
 import os
+import urllib.parse
+import urllib.request
 from decimal import Decimal, InvalidOperation
 
 from django.contrib.auth import login as auth_login
@@ -493,6 +495,69 @@ def openai_health_view(request):
 
 	cache.set("plantswap:openai-health", health, timeout=300)
 	return JsonResponse(health)
+
+
+@require_GET
+def live_food_data_view(request):
+	query = request.GET.get("query", "").strip()
+	currency = request.GET.get("currency", "USD").strip().upper()
+	if not query:
+		return JsonResponse({"error": "Enter a dish name or ingredients first."}, status=400)
+	if len(query) > 300:
+		return JsonResponse({"error": "The lookup query is too long."}, status=400)
+
+	result = {"nutrition": None, "price": None, "sources": []}
+	try:
+		params = urllib.parse.urlencode({
+			"search_terms": query,
+			"search_simple": "1",
+			"action": "process",
+			"json": "1",
+			"page_size": "3",
+			"fields": "product_name,nutriments,url",
+		})
+		request_obj = urllib.request.Request(
+			"https://world.openfoodfacts.org/cgi/search.pl?" + params,
+			headers={"Accept": "application/json", "User-Agent": "PlantSwap-Django/1.0"},
+		)
+		with urllib.request.urlopen(request_obj, timeout=8) as response:
+			payload = json.loads(response.read().decode("utf-8"))
+		product = next((item for item in payload.get("products", []) if item.get("nutriments")), None)
+		if product:
+			nutriments = product["nutriments"]
+			result["nutrition"] = {
+				"calories": nutriments.get("energy-kcal_100g"),
+				"protein_g": nutriments.get("proteins_100g"),
+				"fat_g": nutriments.get("fat_100g"),
+				"fiber_g": nutriments.get("fiber_100g"),
+			}
+		if product and product.get("url"):
+			result["sources"].append(product["url"])
+	except Exception:
+		pass
+
+	try:
+		params = urllib.parse.urlencode({"search_terms": query, "page_size": "5"})
+		request_obj = urllib.request.Request(
+			"https://prices.openfoodfacts.org/api/v1/prices?" + params,
+			headers={"Accept": "application/json", "User-Agent": "PlantSwap-Django/1.0"},
+		)
+		with urllib.request.urlopen(request_obj, timeout=8) as response:
+			payload = json.loads(response.read().decode("utf-8"))
+		record = next((item for item in (payload.get("items") or payload.get("results") or []) if item and (item.get("price") or item.get("price_value"))), None)
+		if record:
+			price_value = record.get("price") or record.get("price_value")
+			try:
+				result["price"] = float(price_value)
+			except (TypeError, ValueError):
+				result["price"] = None
+		if record:
+			result["sources"].append(record.get("url") or "https://prices.openfoodfacts.org")
+	except Exception:
+		pass
+
+	result["currency"] = currency
+	return JsonResponse(result)
 
 
 @require_GET

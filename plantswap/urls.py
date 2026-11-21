@@ -28,5 +28,6 @@ urlpatterns = [
     path("api/convert/", views.convert_menu_view, name="convert_menu"),
     path("api/sample/", views.sample_menu_view, name="sample_menu"),
     path("api/health/", views.openai_health_view, name="openai_health"),
+    path("api/live-food-data/", views.live_food_data_view, name="live_food_data"),
     path("api/conversions/<int:conversion_id>/", views.conversion_detail, name="conversion_detail"),
 ]
