@@ -94,6 +94,24 @@ class AccountAndConversionAccessTests(TestCase):
 		self.assertRedirects(logout_response, reverse("index"))
 		self.assertNotIn("_auth_user_id", self.client.session)
 
+	def test_structured_dish_csv_payload_converts_three_distinct_dishes(self):
+		self.client.force_login(self.owner)
+		payload = (
+			"Dish Name,Ingredients,Current Price\n"
+			'Beef Suya,"beef, suya spice, ginger, pepper",NGN 6500\n'
+			'Chicken Pepper Soup,"chicken, uziza, pepper, onions",NGN 5800\n'
+			'Plantain Bowl,"plantain, beans, red pepper",NGN 4200'
+		)
+		with patch.dict(os.environ, {"GEMINI_API_KEY": ""}):
+			response = self.client.post(
+				reverse("convert_menu"),
+				data=json.dumps({"menu_text": payload, "restaurant_name": "Test Kitchen"}),
+				content_type="application/json",
+			)
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(len(response.json()["dishes"]), 3)
+		self.assertEqual(response.json()["dishes"][0]["swapped_name"], "Soya Chunk Suya")
+
 	def test_index_only_lists_the_signed_in_users_conversions(self):
 		MenuConversion.objects.create(
 			user=self.owner,

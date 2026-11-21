@@ -177,8 +177,44 @@
           {% endif %}
           <label for="restaurant-name" class="mb-2 block text-sm font-bold text-forest">Restaurant name <span class="font-normal text-ink/50">(optional)</span></label>
           <input id="restaurant-name" name="restaurant_name" type="text" maxlength="120" value="{{ restaurant_name|default:'' }}" class="mb-5 w-full rounded-sm border border-line bg-paper/50 px-4 py-3 text-ink placeholder:text-ink/35" placeholder="e.g. Green Table Kitchen">
-          <label for="menu-text" class="mb-3 block text-sm font-bold text-forest">Dish name, ingredients, current price</label>
-          <textarea id="menu-text" name="menu_text" class="menu-textarea w-full rounded-sm border border-line bg-paper/50 p-4 text-ink placeholder:text-ink/35" placeholder="Dish Name, Ingredients, Current Price&#10;Beef Suya, beef; suya spice; pepper, NGN 6500&#10;Chicken Pepper Soup, chicken; pepper; uziza, NGN 5800" required>{{ raw_menu_text|default:'' }}</textarea>
+          <div class="mb-3 flex items-end justify-between gap-3">
+            <div>
+              <p class="text-xs font-bold uppercase tracking-[.1em] text-leaf">Menu dishes</p>
+              <label class="mt-1 block text-sm font-bold text-forest" for="dish-name">Build your menu, dish by dish</label>
+            </div>
+            <button id="paste-toggle" type="button" class="rounded-md border border-line px-3 py-2 text-xs font-bold text-forest hover:bg-white">Paste or upload</button>
+          </div>
+
+          <div id="structured-dish-input" class="rounded-lg border border-[#dce5de] bg-[#f8faf7] p-3 sm:p-4">
+            <div class="grid gap-3 lg:grid-cols-[minmax(160px,.8fr)_minmax(220px,1.4fr)_minmax(120px,.6fr)]">
+              <div>
+                <label for="dish-name" class="mb-1.5 block text-xs font-bold uppercase tracking-[.08em] text-ink/60">Dish name</label>
+                <input id="dish-name" type="text" maxlength="160" class="h-11 w-full rounded-md border border-line bg-white px-3 text-sm text-ink placeholder:text-ink/35" placeholder="Beef Suya">
+              </div>
+              <div>
+                <label for="dish-ingredients" class="mb-1.5 block text-xs font-bold uppercase tracking-[.08em] text-ink/60">Ingredients</label>
+                <input id="dish-ingredients" type="text" maxlength="1000" class="h-11 w-full rounded-md border border-line bg-white px-3 text-sm text-ink placeholder:text-ink/35" placeholder="Beef, suya spice, ginger, pepper">
+              </div>
+              <div>
+                <label for="dish-price" class="mb-1.5 block text-xs font-bold uppercase tracking-[.08em] text-ink/60">Price</label>
+                <input id="dish-price" type="text" inputmode="decimal" maxlength="30" class="h-11 w-full rounded-md border border-line bg-white px-3 text-sm text-ink placeholder:text-ink/35" placeholder="NGN 6500">
+              </div>
+            </div>
+            <div class="mt-3 flex items-center justify-between gap-3">
+              <p id="dish-input-status" class="text-xs text-ink/55" role="status">Add each dish and repeat as needed.</p>
+              <button id="add-dish-button" type="button" class="inline-flex h-10 items-center gap-2 rounded-md bg-forest px-4 text-sm font-bold text-white hover:bg-[#245849]"><span aria-hidden="true">+</span> Add dish</button>
+            </div>
+          </div>
+
+          <div id="dish-list" class="mt-3 divide-y divide-line overflow-hidden rounded-lg border border-[#dce5de] bg-white" aria-label="Added dishes">
+            <p id="dish-list-empty" class="px-4 py-5 text-sm text-ink/55">No dishes added yet. Use the fields above or paste a menu.</p>
+          </div>
+
+          <div id="paste-panel" class="mt-3 hidden" hidden>
+            <label for="menu-text" class="mb-1.5 block text-xs font-bold uppercase tracking-[.08em] text-ink/60">Paste or edit menu text</label>
+            <textarea id="menu-text" class="menu-textarea w-full rounded-md border border-line bg-[#fbfcfb] p-4 text-ink placeholder:text-ink/35" placeholder="Dish Name, Ingredients, Current Price&#10;Beef Suya, beef; suya spice; pepper, NGN 6500&#10;Chicken Pepper Soup, chicken; pepper; uziza, NGN 5800">{{ raw_menu_text|default:'' }}</textarea>
+          </div>
+          <input id="combined-menu" name="menu_text" type="hidden" value="{{ raw_menu_text|default:'' }}">
           {% if error %}<p class="mb-3 text-sm font-semibold text-red-700" role="alert">{{ error }}</p>{% endif %}
           <div class="mt-4 flex flex-wrap items-center justify-between gap-4">
             <p id="form-status" class="flex min-h-5 items-center gap-2 text-sm text-ink/60" role="status" aria-live="polite"><span class="status-dot"></span>{% if user.is_authenticated %}Ready to model your menu.{% else %}Sign in to convert your menu.{% endif %}</p>
@@ -257,6 +293,7 @@
   <script>
     const form = document.getElementById('menu-form');
     const menuText = document.getElementById('menu-text');
+    const combinedMenu = document.getElementById('combined-menu');
     const fileInput = document.getElementById('menu-file');
     const sampleButton = document.getElementById('sample-button');
     const statusLine = document.getElementById('form-status');
@@ -267,6 +304,16 @@
     const summaryGrid = document.getElementById('summary-grid');
     const comparisonList = document.getElementById('comparison-list');
     const historyList = document.getElementById('history-list');
+    const dishName = document.getElementById('dish-name');
+    const dishIngredients = document.getElementById('dish-ingredients');
+    const dishPrice = document.getElementById('dish-price');
+    const addDishButton = document.getElementById('add-dish-button');
+    const dishList = document.getElementById('dish-list');
+    const dishListEmpty = document.getElementById('dish-list-empty');
+    const dishInputStatus = document.getElementById('dish-input-status');
+    const pastePanel = document.getElementById('paste-panel');
+    const pasteToggle = document.getElementById('paste-toggle');
+    let structuredDishes = [];
     function setStatus(message, isError = false) {
       statusLine.replaceChildren();
       const dot = document.createElement('span');
@@ -275,6 +322,45 @@
       statusLine.append(dot, document.createTextNode(message));
       statusLine.classList.toggle('text-red-700', isError);
       statusLine.classList.toggle('text-ink/60', !isError);
+    }
+
+    function syncCombinedMenu() {
+      if (structuredDishes.length) {
+        const header = 'Dish Name,Ingredients,Current Price';
+        const rows = structuredDishes.map(dish => {
+          const ingredients = dish.ingredients.replace(/"/g, '""');
+          return `${dish.name.replace(/,/g, ' ')},"${ingredients}",${dish.price}`;
+        });
+        combinedMenu.value = [header, ...rows].join('\n');
+      } else {
+        combinedMenu.value = menuText.value.trim();
+      }
+    }
+
+    function renderStructuredDishes() {
+      dishList.replaceChildren();
+      if (!structuredDishes.length) {
+        const empty = element('p', 'px-4 py-5 text-sm text-ink/55', 'No dishes added yet. Use the fields above or paste a menu.');
+        dishList.append(empty);
+        syncCombinedMenu();
+        return;
+      }
+      structuredDishes.forEach((dish, index) => {
+        const row = element('div', 'grid items-center gap-3 px-3 py-3 sm:grid-cols-[.8fr_1.4fr_.55fr_auto]');
+        row.append(element('p', 'font-bold text-forest', dish.name));
+        row.append(element('p', 'text-sm leading-5 text-ink/65', dish.ingredients));
+        row.append(element('p', 'text-sm font-bold text-forest', dish.price));
+        const remove = element('button', 'h-8 w-8 justify-self-end rounded-md border border-line text-sm font-bold text-ink/55 hover:border-coral hover:text-coral', '×');
+        remove.type = 'button';
+        remove.setAttribute('aria-label', `Remove ${dish.name}`);
+        remove.addEventListener('click', () => {
+          structuredDishes.splice(index, 1);
+          renderStructuredDishes();
+        });
+        row.append(remove);
+        dishList.append(row);
+      });
+      syncCombinedMenu();
     }
 
     function element(tag, className, text) {
@@ -390,6 +476,41 @@
       return data;
     }
 
+    pasteToggle.addEventListener('click', () => {
+      const isHidden = pastePanel.hidden;
+      pastePanel.hidden = !isHidden;
+      pasteToggle.textContent = pastePanel.hidden ? 'Paste or upload' : 'Use dish fields';
+      if (!pastePanel.hidden) menuText.focus();
+    });
+
+    [dishName, dishIngredients, dishPrice].forEach(input => {
+      input.addEventListener('keydown', event => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          addDishButton.click();
+        }
+      });
+    });
+
+    addDishButton.addEventListener('click', () => {
+      const name = dishName.value.trim();
+      const ingredients = dishIngredients.value.trim();
+      const price = dishPrice.value.trim();
+      if (!name || !ingredients || !price) {
+        dishInputStatus.textContent = 'Complete dish name, ingredients and price.';
+        dishInputStatus.className = 'text-xs font-semibold text-coral';
+        return;
+      }
+      structuredDishes.push({ name, ingredients, price });
+      dishName.value = '';
+      dishIngredients.value = '';
+      dishPrice.value = '';
+      dishInputStatus.textContent = `${structuredDishes.length} dish${structuredDishes.length === 1 ? '' : 'es'} ready.`;
+      dishInputStatus.className = 'text-xs text-leaf';
+      renderStructuredDishes();
+      dishName.focus();
+    });
+
     sampleButton.addEventListener('click', async () => {
       sampleButton.disabled = true;
       try {
@@ -397,6 +518,10 @@
         if (!response.ok) throw new Error('Could not load the sample menu.');
         const data = await response.json();
         menuText.value = data.menu_text;
+        structuredDishes = [];
+        renderStructuredDishes();
+        pastePanel.hidden = false;
+        pasteToggle.textContent = 'Use dish fields';
         setStatus(document.body.dataset.authenticated === 'true' ? 'Sample menu loaded. Ready to convert.' : 'Sample loaded. Sign in to convert and save it.');
         menuText.focus();
       } catch (error) {
@@ -416,6 +541,10 @@
       }
       try {
         menuText.value = await file.text();
+        structuredDishes = [];
+        renderStructuredDishes();
+        pastePanel.hidden = false;
+        pasteToggle.textContent = 'Use dish fields';
         setStatus(`${file.name} loaded.`);
       } catch {
         setStatus('Could not read that file. Try a plain text or CSV file.', true);
@@ -424,7 +553,9 @@
 
     form.addEventListener('submit', async event => {
       event.preventDefault();
-      if (!menuText.value.trim()) {
+      if (structuredDishes.length === 0 && menuText.value.trim()) combinedMenu.value = menuText.value.trim();
+      syncCombinedMenu();
+      if (!combinedMenu.value.trim()) {
         setStatus('Add your menu or load the sample menu first.', true);
         return;
       }
@@ -440,7 +571,7 @@
             'X-CSRFToken': form.querySelector('[name=csrfmiddlewaretoken]').value
           },
           body: JSON.stringify({
-            menu_text: menuText.value,
+            menu_text: combinedMenu.value,
             restaurant_name: document.getElementById('restaurant-name').value
           })
         });
